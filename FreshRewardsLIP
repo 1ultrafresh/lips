@@ -1,0 +1,156 @@
+LIP: 
+Title: Fresh Reward Module
+Author: Ultrafresh
+        
+Discussions-To: https://research.lisk.com/t/fresh-voter-rewards-proposal/383
+Status: Draft
+Type: Standards Track
+Created: 2022-10-12
+Updated: 2022-12-12
+Requires: 0042, 0051, 0058
+Abstract
+The Reward module provides the base reward system for a blockchain developed with the Lisk SDK. This update would allow Lisk users to have guarenteed rewards earned from voting.
+
+Copyright
+This LIP is licensed under the Creative Commons Zero 1.0 Universal.
+
+Motivation
+The goal of this LIP is to significantly increase the total value locked (TVL) of LSK tokens, including (TVL) of self-voting, as well as increase decentralization by adding more active delegates. These variables will still be easily changed, replaced, or removed for modular use.
+
+Rationale
+To increase TVL, all voters should earn tokens for participation, by voting for any actively forging, non-penalized, delegate. 
+-This incentivizes voters to remain active and have well informed votes. (Voting for a banned delegate will not earn any rewards)
+
+Increase self-vote TVL by having self-vote count with an increased voting value of 2x a normal vote (or some other increased multiplier). 
+-Active delegates will be incentivized to lock more self-vote instead of voting for other delegates, which will consolidate a more votes and increase self-vote TVL.
+
+This could be done by having half of the block reward for the entire round which is distributed to all voters proportional to vote weight, with an increased weight for self-votes.
+
+
+In this section, we specify the protocol logic in the lifecycle of a block injected by the Reward module as well as the functions that can be called from off-chain services. It depends on the token, BFT, and random modules.
+
+Types
+Name	Type	Validation	Description
+BlockHeader	object	see LIP 0055	The header of a block.
+Block	object	see LIP 0055	The block object.
+Constants
+Name	Type	Value
+MODULE_NAME_REWARD	string	"reward"
+EVENT_NAME_REWARD_MINTED	string	"rewardMinted"
+REWARD_NO_REDUCTION	uint32	0
+REWARD_REDUCTION_SEED_REVEAL	uint32	1
+REWARD_REDUCTION_MAX_PREVOTES	uint32	2
+TOKEN_ID_REWARD	bytes	specified as part of module configuration
+TOKEN_ID_LSK	bytes	0x0000000000000000
+REWARD_REDUCTION_FACTOR_BFT	uint32	4
+Token for rewards
+The Reward module triggers the minting of rewards in the fungible token identified by the value of TOKEN_ID_REWARD, which denotes a token ID. The value of TOKEN_ID_REWARD is set according to the initial configuration of the Reward module.
+
+Reward Brackets
+As part of the Reward module configuration, the module has to define certain reward brackets, i.e., the values of the default block reward depending on the height of the block. For this LIP, we assume the reward brackets are given by the function getDefaultRewardAtHeight(height), which returns a 64-bit unsigned integer value, the default block reward, given the block height height as input.
+
+Lisk Mainchain Configuration
+Mainchain Rewards Token
+The token for rewards on the Lisk mainchain is the LSK token, with token ID equals to TOKEN_ID_LSK.
+
+Mainchain Reward Brackets
+The reward brackets for the Lisk Mainchain are as follows:
+
+Heights	Default Reward
+From 1,451,520 to 4,451,519	5 × 108
+From 4,451,520 to 7,451,519	4 × 108
+From 7,451,520 to 10,451,519	3 × 108
+From 10,451,520 to 13,451,519	2 × 108
+From 13,451,520 onwards	1 × 108
+This corresponds to default rewards of 5 LSK, 4 LSK, 3 LSK, 2 LSK, and 1 LSK respectively.
+
+State Store
+This module does not define any state store.
+
+Commands
+This module does not define any command.
+
+Events
+RewardMinted
+The event is emitted when the reward is minted. In case of a reward reduction, it provides information about the reason for the reduction. This event has name = EVENT_NAME_REWARD_MINTED.
+
+Topics
+generatorAddress: the address of the block generator that obtains the reward.
+Data
+rewardMintedDataSchema = {
+    "type": "object",
+    "required": ["amount", "reduction"],
+    "properties": {
+        "amount": {
+            "dataType": "uint64",
+            "fieldNumber": 1
+        },
+        "reduction": {
+            "dataType": "uint32",
+            "fieldNumber": 2
+        }
+    }
+}
+amount: the amount of rewards minted.
+reduction: an integer indicating whether the reward was reduced and for which reason. Allowed values are: REWARD_NO_REDUCTION, REWARD_REDUCTION_SEED_REVEAL, REWARD_REDUCTION_MAX_PREVOTES.
+Internal Functions
+The Reward module has the following internal function.
+
+getBlockReward
+This function is used to retrieve the reward of a block at a given height.
+
+Returns
+amount: amount of block reward to be minted.
+reduction: an integer indicating whether the reward is reduced. Possible values are REWARD_NO_REDUCTION, REWARD_REDUCTION_SEED_REVEAL, REWARD_REDUCTION_MAX_PREVOTES.
+Execution
+def getBlockReward(blockHeader: BlockHeader) -> tuple[uint64, uint32]:
+  if isSeedRevealValid(blockHeader.generatorAddress, blockHeader.seedReveal) == False:
+    return (0, REWARD_REDUCTION_SEED_REVEAL)
+
+  defaultReward = getDefaultRewardAtHeight(blockHeader.height)
+  if impliesMaximalPrevotes(blockHeader) == False:
+    return (defaultReward / REWARD_REDUCTION_FACTOR_BFT, REWARD_REDUCTION_MAX_PREVOTES)
+
+  return (defaultReward, REWARD_NO_REDUCTION)
+Here / represents integer division, isSeedRevealValid is the function exposed by the Random module and impliesMaximalPrevotes is the function exposed by the BFT module.
+
+Protocol Logic for Other Modules
+This module does not define any specific logic for other modules.
+
+Endpoints for Off-Chain Services
+The Reward module exposes the following functions for off-chain services.
+
+getDefaultRewardAtHeight
+This function is used to retrieve the expected default reward at a given height.
+
+Parameters
+The height of a block as a 32-bit unsigned integer.
+
+Returns
+The default reward of the block as a 64-bit unsigned integer.
+
+Block Processing
+After Block Execution
+The following function assigns block rewards after all transactions in the block are executed. Here we refer to the mint function exposed by the Token module.
+
+def afterTransactionsExecute(b: Block):
+    (blockReward, reduction) = getBlockReward(b.header)
+    if blockReward > 0:
+        Token.mint(b.header.generatorAddress, TOKEN_ID_REWARD, blockReward)
+
+    emitEvent(
+        module = MODULE_NAME_REWARD,
+        name = EVENT_NAME_REWARD_MINTED,
+        data = {
+            "amount": blockReward,
+            "reduction": reduction
+            },
+        topics = [b.header.generatorAddress]
+    )
+where TOKEN_ID_REWARD is the token ID of the token used for the reward system of the blockchain. In the case of the Lisk mainchain, TOKEN_ID_REWARD = TOKEN_ID_LSK.
+
+Backwards Compatibility
+This LIP is not backwards compatable and will require a ahrd fork.
+
+Reference Implementation
+TBA
